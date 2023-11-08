@@ -9,7 +9,16 @@
   <body>
     <h2>Hello World</h2>
 
-    <script>
+    <!-- форма сообщений -->
+    <form name="publish">
+        <input type="text" name="message">
+        <input type="submit" value="Отправить">
+    </form>
+  
+  <!-- div с сообщениями -->
+  <div id="messages"></div>
+
+    <!-- <script>
         let socket = new WebSocket("ws://127.0.0.1:8080/ws");
         console.log("Attempting Connection...");
 
@@ -27,6 +36,29 @@
             console.log("Socket Error: ", error);
         };
 
+    </script> -->
+
+    <script>
+        var a = 'ws';
+        let socket = new WebSocket('ws://127.0.0.1:8080/' + a);
+
+        // отправка сообщения из формы
+        document.forms.publish.onsubmit = function() {
+        let outgoingMessage = this.message.value;
+
+        socket.send(outgoingMessage);
+        return false;
+        };
+
+        // получение сообщения - отобразить данные в div#messages
+        socket.onmessage = function(event) {
+        let message = event.data;
+
+        let messageElem = document.createElement('div');
+        messageElem.textContent = message;
+        document.getElementById('messages').prepend(messageElem);
+        }
     </script>
+
   </body>
 </html>
