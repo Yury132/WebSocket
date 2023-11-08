@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/websocket"
 )
@@ -20,6 +21,7 @@ var upgrader = websocket.Upgrader{
 // Массив подключений
 type chatStruct struct {
 	ws []*websocket.Conn
+	// Создать срез для пользователей для соответствия конкретного пользователя с конкретным подключением
 }
 
 // Глобальная переменная
@@ -84,6 +86,13 @@ func homePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func wsEndpoint(w http.ResponseWriter, r *http.Request) {
+
+	id, err := strconv.Atoi(r.URL.Query().Get("userId"))
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+
 	// upgrade this connection to a WebSocket
 	// connection
 	ws, err := upgrader.Upgrade(w, r, nil)
@@ -91,7 +100,7 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 		log.Println(err)
 	}
 
-	log.Println("Client Connected")
+	log.Println("Client Connected, ID - ", id)
 	//log.Println("WebSocket", ws)
 
 	// Добавляем каждое подключение в массив

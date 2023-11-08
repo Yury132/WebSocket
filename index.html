@@ -40,7 +40,8 @@
 
     <script>
         var a = 'ws';
-        let socket = new WebSocket('ws://127.0.0.1:8080/' + a);
+        var b = '18';
+        let socket = new WebSocket('ws://127.0.0.1:8080/' + a + '?userId='+ b);
 
         // отправка сообщения из формы
         document.forms.publish.onsubmit = function() {
