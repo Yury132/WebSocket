@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 	"github.com/gorilla/websocket"
 )
 
@@ -19,78 +21,109 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// Вспомогательная структура - ID пользователя и комнаты для перехода в конкретный чат
+type userAndRoomStruct struct {
+	UserId int `json:"user_id"`
+	RoomId int `json:"room_id"`
+}
+
 // Комната
 type roomStruct struct {
-	roomId   int    `json:"room_id"`
+	RoomId   int    `json:"room_id"`
 	RoomName string `json:"room_name"`
 }
 
 // Пользователь
 type userStruct struct {
-	userId   int    `json:"user_id"`
-	userName string `json:"user_name"`
+	UserId   int    `json:"user_id"`
+	UserName string `json:"user_name"`
 }
 
 // Чат
 type chatStruct struct {
-	chatId int               `json:"chat_id"`
-	room   *roomStruct       `json:"room"`
-	ws     []*websocket.Conn `json:"ws"`
-	user   []*userStruct     `json:"user"`
+	ChatId int               `json:"chat_id"`
+	Room   *roomStruct       `json:"room"`
+	Ws     []*websocket.Conn `json:"ws"`
+	User   []*userStruct     `json:"user"`
 }
 
 // Глобальные переменные
 
-// Допустим у нас уже авторизованы 3 пользователя
-var usersHub = []*userStruct{
-	{userId: 1, userName: "Alex"},
-	{userId: 2, userName: "Bob"},
-	{userId: 3, userName: "Sam"},
-}
+// Hub всех пользователей
+var usersHub = []*userStruct{}
 
-// Допустим у нас уже созданы 3 комнаты
-var roomsHub = []*roomStruct{
-	{roomId: 1, RoomName: "Футбол"},
-	{roomId: 2, RoomName: "Хоккей"},
-	{roomId: 3, RoomName: "Баскетбол"},
-}
+// Hub всех комнат
+var roomsHub = []*roomStruct{}
 
-// Допустим у нас уже созданы 3 чата (комнаты)
-// Остальные поля пустые, подключения и новых пользователей мы будем добавлять при подключении к чату
-var chatsHub = []*chatStruct{
-	{chatId: 1, room: roomsHub[0], ws: []*websocket.Conn{}, user: []*userStruct{}},
-	{chatId: 2, room: roomsHub[1], ws: []*websocket.Conn{}, user: []*userStruct{}},
-	{chatId: 3, room: roomsHub[2], ws: []*websocket.Conn{}, user: []*userStruct{}},
-}
+// Hub всех чатов
+var chatsHub = []*chatStruct{}
+
+var store = sessions.NewCookieStore([]byte("super-secret-key"))
+
+// Уникальный ID автоинкремент для чатов и комнат
+var globalId = 1
 
 //
 //
-//--------------------------------------------
+//-----------------------------------------------------------------------------------------------------------
 //
 //
 
-// Создание чата
-func createChat(w http.ResponseWriter, r *http.Request) {
+// Для разных пользователей нужно открывать разные браузеры
+// Страница после прохождения авторизации
+func start(w http.ResponseWriter, r *http.Request) {
 
-	// Название чата
-	getRoomName := r.URL.Query().Get("roomName")
-	if getRoomName == "" {
-		fmt.Println("Название чата пустое")
-		http.NotFound(w, r)
+	// ID пользователя
+	userId, err := strconv.Atoi(r.URL.Query().Get("userId"))
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Println("failed to get id from string")
 		return
 	}
-	fmt.Println(getRoomName)
 
-	fmt.Println("До")
-	fmt.Printf("%+v\n", roomsHub)
+	// Костыль и проверка на то, что данного пользователя не было в массиве - поиск по ID
+	if userId != -1 && indexU(userId) == -1 {
+		// Создаем нового пользователя
+		newUser := userStruct{UserId: userId, UserName: r.URL.Query().Get("userName")}
+		// Добавляем в массив
+		usersHub = append(usersHub, &newUser)
 
-	// Создаем новую комнату --------------------------------------------ID------------------------------------------
-	newRoom := roomStruct{roomId: 5, RoomName: getRoomName}
-	// Добавляем в массив
-	roomsHub = append(roomsHub, &newRoom)
+		// // Задаем жизнь сессии в секундах
+		// // 10 мин
+		// store.Options = &sessions.Options{
+		// 	MaxAge: 60 * 10,
+		// }
+		//
+		// Создаем сессию
+		session, err := store.Get(r, "session-name")
+		if err != nil {
+			fmt.Println("session create failed")
+		}
 
-	fmt.Println("После")
-	fmt.Printf("%+v\n", roomsHub)
+		// Сохраняем данные пользователя
+		// Будем получать userId и userName из гугл авторизации!!!!!!!!!!!!!!!!!!!!!!!!!!!Следить чтобы не пересохранялись пустые значения......
+		session.Values["userId"] = r.URL.Query().Get("userId")
+		session.Values["userName"] = r.URL.Query().Get("userName")
+		if err = session.Save(r, w); err != nil {
+			fmt.Println("filed to save session")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		// Получаем сессию
+		// session, err = store.Get(r, "session-name")
+		// if err != nil {
+		// 	fmt.Println("session failed")
+		// 	w.WriteHeader(http.StatusInternalServerError)
+		// 	return
+		// }
+
+		// Читаем данные из сессии
+		// usid := session.Values["userId"].(string)
+
+		// fmt.Println("ID пользователя из Сессии:")
+		// fmt.Println(usid)
+	}
 
 	tmpl, err := template.ParseFiles("./start.html")
 	if err != nil {
@@ -102,18 +135,113 @@ func createChat(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, roomsHub)
 }
 
+// Создание чата
+func createChat(w http.ResponseWriter, r *http.Request) {
+
+	// Название чата из формы POST запрос
+	getRoomName := r.FormValue("chatName")
+	if getRoomName == "" {
+		fmt.Println("Название чата пустое")
+		// Переадресуем пользователя на ту же страницу
+		// Костыль userId == -1
+		http.Redirect(w, r, "/start?userId=-1&userName=xxx", http.StatusSeeOther)
+		return
+	}
+	fmt.Println(getRoomName)
+
+	// Создаем новую комнату
+	newRoom := roomStruct{RoomId: globalId, RoomName: getRoomName}
+	// Добавляем в массив
+	roomsHub = append(roomsHub, &newRoom)
+
+	// Создаем новый чат
+	newChat := chatStruct{ChatId: globalId, Room: &newRoom, Ws: []*websocket.Conn{}, User: []*userStruct{}}
+	// Добавляем в массив
+	chatsHub = append(chatsHub, &newChat)
+
+	globalId++
+	fmt.Println("globalId ", globalId)
+
+	// Переадресуем пользователя на ту же страницу
+	// Костыль userId == -1
+	http.Redirect(w, r, "/start?userId=-1&userName=xxx", http.StatusSeeOther)
+}
+
+// Переходим в конкретный чат
+func goChat(w http.ResponseWriter, r *http.Request) {
+
+	vars := mux.Vars(r)
+
+	// ID чата
+	chatId, err := strconv.Atoi(vars["chatId"])
+	if err != nil || chatId < 1 {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Получаем сессию
+	session, err := store.Get(r, "session-name")
+	if err != nil {
+		fmt.Println("session failed")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Из сессии читаем ID пользователя
+	userIdString := session.Values["userId"].(string)
+	// Переводим в int
+	userIdInt, err := strconv.Atoi(userIdString)
+	if err != nil || userIdInt < 1 {
+		http.NotFound(w, r)
+		return
+	}
+
+	fmt.Println("ID пользователя из Сессии: ", userIdInt)
+
+	// Формируем структуру
+	data := userAndRoomStruct{UserId: userIdInt, RoomId: chatId}
+
+	tmpl, err := template.ParseFiles("./index1.html")
+	if err != nil {
+		fmt.Println("filed to show home page")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	// Передаем данные
+	tmpl.Execute(w, data)
+}
+
 // Вывод всех чатов
 func getChats(w http.ResponseWriter, r *http.Request) {
+	response, err := json.Marshal(chatsHub)
+	if err != nil {
+		fmt.Println("filed to marshal response data")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Write(response)
+}
 
+// Вывод всех комнат
+func getRooms(w http.ResponseWriter, r *http.Request) {
 	response, err := json.Marshal(roomsHub)
 	if err != nil {
 		fmt.Println("filed to marshal response data")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
 	w.Write(response)
+}
 
+// Вывод всех пользователей
+func getUsers(w http.ResponseWriter, r *http.Request) {
+	response, err := json.Marshal(usersHub)
+	if err != nil {
+		fmt.Println("filed to marshal response data")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Write(response)
 }
 
 // Для первого пользователя и первого чата
@@ -210,25 +338,25 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 	currentChatId := indexChRoom(getRoomId)
 
 	// Добавляем пользователя к конкретному чату
-	chatsHub[currentChatId].user = append(chatsHub[currentChatId].user, usersHub[currentUserId])
+	chatsHub[currentChatId].User = append(chatsHub[currentChatId].User, usersHub[currentUserId])
 	// Добавляем подключение к конкретному чату в любом случае
-	chatsHub[currentChatId].ws = append(chatsHub[currentChatId].ws, conn)
+	chatsHub[currentChatId].Ws = append(chatsHub[currentChatId].Ws, conn)
 
 	fmt.Println("Вывод Hub:")
 	fmt.Printf("%+v\n", chatsHub[currentChatId])
-	fmt.Println("Присоединились к чату ID: ", chatsHub[currentChatId].room.roomId, " - ", chatsHub[currentChatId].room.RoomName)
+	fmt.Println("Присоединились к чату ID: ", chatsHub[currentChatId].Room.RoomId, " - ", chatsHub[currentChatId].Room.RoomName)
 
-	fmt.Printf("Количество подключений в данном чате: %v\n", len(chatsHub[currentChatId].ws))
+	fmt.Printf("Количество подключений в данном чате: %v\n", len(chatsHub[currentChatId].Ws))
 
 	// Сообщение клиенту
-	err = conn.WriteMessage(1, []byte(usersHub[currentUserId].userName+", добро пожаловать в чат!"))
+	err = conn.WriteMessage(1, []byte(usersHub[currentUserId].UserName+", добро пожаловать в чат!"))
 	if err != nil {
 		log.Println(err)
 	}
 
 	// В бесконечном цикле прослушиваем входящие сообщения от каждого подключенного клиента
 	// Передаем ID чата, ID пользователя, ID комнаты
-	reader(conn, chatsHub[currentChatId].chatId, getUserId, getRoomId)
+	reader(conn, chatsHub[currentChatId].ChatId, getUserId, getRoomId)
 }
 
 // В бесконечном цикле прослушиваем входящие сообщения от каждого подключенного клиента
@@ -256,27 +384,27 @@ func reader(conn *websocket.Conn, chatId int, userId int, roomId int) {
 				return
 			}
 			// Вычисляем индекс удаляемого подключения из чата
-			indexConn := indexOfConn(conn, chatsHub[currentChatId].ws)
+			indexConn := indexOfConn(conn, chatsHub[currentChatId].Ws)
 			// Удаляем подключение из массива по индексу
-			chatsHub[currentChatId].ws = append(chatsHub[currentChatId].ws[:indexConn], chatsHub[currentChatId].ws[indexConn+1:]...)
+			chatsHub[currentChatId].Ws = append(chatsHub[currentChatId].Ws[:indexConn], chatsHub[currentChatId].Ws[indexConn+1:]...)
 			fmt.Println("Удалили одно подключение из чата")
 
 			// Вычисляем индекс удаляемого пользователя из чата
-			indexUser := indexOfUser(usersHub[currentUserId], chatsHub[currentChatId].user)
+			indexUser := indexOfUser(usersHub[currentUserId], chatsHub[currentChatId].User)
 			// Удаляем подключение из массива по индексу
-			chatsHub[currentChatId].user = append(chatsHub[currentChatId].user[:indexUser], chatsHub[currentChatId].user[indexUser+1:]...)
+			chatsHub[currentChatId].User = append(chatsHub[currentChatId].User[:indexUser], chatsHub[currentChatId].User[indexUser+1:]...)
 			fmt.Println("Удалили одного пользователя из чата")
 
 			// Выводим структуру
 			fmt.Printf("%+v\n", chatsHub[currentChatId])
-			fmt.Printf("Количество подключений в данном чате: %v\n", len(chatsHub[currentChatId].ws))
+			fmt.Printf("Количество подключений в данном чате: %v\n", len(chatsHub[currentChatId].Ws))
 			return
 		}
 
-		log.Println("Пришло сообщение: ", string(p), " от пользователя ID ", usersHub[currentUserId].userId, " - ", usersHub[currentUserId].userName)
+		log.Println("Пришло сообщение: ", string(p), " от пользователя ID ", usersHub[currentUserId].UserId, " - ", usersHub[currentUserId].UserName)
 
 		// Рассылка сообщения всем участникам чата---------------------------------------------------------------------------------------------
-		for i, conn := range chatsHub[currentChatId].ws {
+		for i, conn := range chatsHub[currentChatId].Ws {
 			if err := conn.WriteMessage(messageType, p); err != nil {
 				log.Println("Ошибка при рассылке, ID подключения - ", i, " Ошибка:  ", err)
 				return
@@ -311,7 +439,7 @@ func indexU(getUserId int) int {
 	// Ищем индекс пользователя
 	currentUserId := -1
 	for i, us := range usersHub {
-		if us.userId == getUserId {
+		if us.UserId == getUserId {
 			currentUserId = i
 			break
 		}
@@ -328,7 +456,7 @@ func indexCh(chatId int) int {
 	// Ищем текущий индекс чата
 	currentChatId := -1
 	for i, cs := range chatsHub {
-		if cs.chatId == chatId {
+		if cs.ChatId == chatId {
 			currentChatId = i
 			break
 		}
@@ -344,7 +472,7 @@ func indexCh(chatId int) int {
 func indexChRoom(roomId int) int {
 	currentChatId := -1
 	for i, cs := range chatsHub {
-		if cs.room.roomId == roomId {
+		if cs.Room.RoomId == roomId {
 			currentChatId = i
 			break
 		}
@@ -358,17 +486,28 @@ func indexChRoom(roomId int) int {
 
 // Маршруты
 func setupRoutes() {
-	http.HandleFunc("/1", homePage1)
-	http.HandleFunc("/2", homePage2)
-	http.HandleFunc("/3", homePage3)
-	http.HandleFunc("/4", homePage4)
-	http.HandleFunc("/5", homePage5)
+	r := mux.NewRouter()
+
+	r.HandleFunc("/1", homePage1)
+	r.HandleFunc("/2", homePage2)
+	r.HandleFunc("/3", homePage3)
+	r.HandleFunc("/4", homePage4)
+	r.HandleFunc("/5", homePage5)
 	// Открываем подключение для каждого клиента по WebSocket
-	http.HandleFunc("/ws", wsEndpoint)
+	r.HandleFunc("/ws", wsEndpoint)
 	// Создание чата
-	http.HandleFunc("/create-chat", createChat)
+	r.HandleFunc("/create-chat", createChat)
+	// Вывод всех комнат
+	r.HandleFunc("/get-rooms", getRooms)
 	// Вывод всех чатов
-	http.HandleFunc("/get-chats", getChats)
+	r.HandleFunc("/get-chats", getChats)
+	// Вывод всех пользователей
+	r.HandleFunc("/get-users", getUsers)
+	// Страница после прохождения авторизации
+	r.HandleFunc("/start", start)
+	// Переход в конкретный чат
+	r.HandleFunc("/go-chat/{chatId:[0-9]+}", goChat)
+	http.Handle("/", r)
 }
 
 func main() {
