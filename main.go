@@ -57,8 +57,15 @@ type chatStruct struct {
 // Передаваемое сообщение в Nats
 type SendMessage struct {
 	Msg         string `json:"msg"`
+	Author      string `json:"author"`
 	MessageType int    `json:"messageType"`
 	ChatId      int    `json:"chatId"`
+}
+
+// Передаваемое сообщение по WebSocket клиету для отображения на странице
+type MessageOnScreen struct {
+	Msg    string `json:"msg"`
+	Author string `json:"author"`
 }
 
 // Глобальные переменные
@@ -77,11 +84,10 @@ var store = sessions.NewCookieStore([]byte("super-secret-key"))
 // Уникальный ID автоинкремент для чатов и комнат
 var globalId = 1
 
-// Поток Nats
+// JetStream Nats
 var js jetstream.JetStream
 
-// var ctx context.Context
-// var cancel context.CancelFunc
+// Поток Nats
 var stream jetstream.Stream
 
 //
@@ -309,8 +315,21 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("Количество подключений в данном чате: %v\n", len(chatsHub[currentChatId].Ws))
 
+	// Готовим сообщение JSON для отправки
+	msg := MessageOnScreen{
+		Msg:    "Добро пожаловать в чат!",
+		Author: usersHub[currentUserId].UserName,
+	}
+
+	// Кодируем
+	b, err := json.Marshal(msg)
+	if err != nil {
+		fmt.Println("js message marshal err")
+		return
+	}
+
 	// Сообщение клиенту
-	err = conn.WriteMessage(1, []byte(usersHub[currentUserId].UserName+", добро пожаловать в чат!"))
+	err = conn.WriteMessage(1, b)
 	if err != nil {
 		log.Println(err)
 	}
@@ -367,6 +386,7 @@ func reader(conn *websocket.Conn, chatId int, userId int, roomId int) {
 		// Готовим сообщение для отправки
 		msg := SendMessage{
 			Msg:         string(p),
+			Author:      usersHub[currentUserId].UserName,
 			MessageType: messageType,
 			ChatId:      currentChatId,
 		}
@@ -500,7 +520,21 @@ func worker(id int, jobs <-chan *SendMessage) {
 		//fmt.Println("worker", id, "принял сообщение: ", j)
 		// Рассылка сообщения всем участникам чата
 		for i, conn := range chatsHub[j.ChatId].Ws {
-			if err := conn.WriteMessage(j.MessageType, []byte(j.Msg)); err != nil {
+
+			// Готовим сообщение JSON для отправки
+			msg := MessageOnScreen{
+				Msg:    j.Msg,
+				Author: j.Author,
+			}
+
+			// Кодируем
+			b, err := json.Marshal(msg)
+			if err != nil {
+				fmt.Println("js message marshal err")
+				return
+			}
+
+			if err := conn.WriteMessage(j.MessageType, b); err != nil {
 				log.Println("Ошибка при рассылке, ID подключения - ", i, " Ошибка:  ", err)
 				continue
 			}
@@ -567,7 +601,6 @@ func main() {
 	// При получении сообщений, передает задачи-данные-смс воркерам для последующей рассылки
 	go func() {
 		_, err := cons.Consume(func(msg jetstream.Msg) {
-
 			// Декодируем
 			var info = new(SendMessage)
 			if err := json.Unmarshal(msg.Data(), info); err != nil {

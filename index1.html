@@ -50,14 +50,17 @@
         return false;
         };
 
-        // Получение сообщения - отобразить данные в div#messages
+        // Получение сообщения JSON - отображение данных в div#messages
         socket.onmessage = function(event) {
         let message = event.data;
-        
+        console.log(message)
+        // Парсим JSON
+        var msg = JSON.parse(message);
 
         // Создаем новый элемент
         let messageElem = document.createElement('div');
-        messageElem.textContent = message;
+        // Формируем смс
+        messageElem.textContent = msg.author + ": " + msg.msg;
         // Добавляем его
         document.getElementById('messages').append(messageElem);
         }
