@@ -30,8 +30,10 @@ var upgrader = websocket.Upgrader{
 
 // Вспомогательная структура - ID пользователя и комнаты для перехода в конкретный чат
 type userAndRoomStruct struct {
-	UserId int `json:"user_id"`
-	RoomId int `json:"room_id"`
+	UserId   int    `json:"user_id"`
+	UserName string `json:"user_name"`
+	RoomId   int    `json:"room_id"`
+	RoomName string `json:"room_name"`
 }
 
 // Комната
@@ -225,8 +227,14 @@ func goChat(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("ID пользователя из Сессии: ", userIdInt)
 
+	// Из сессии читаем Name пользователя
+	userName := session.Values["userName"].(string)
+
+	// Получаем текущий индекс конкретного чата в массиве
+	indexChat := indexCh(chatId)
+
 	// Формируем структуру
-	data := userAndRoomStruct{UserId: userIdInt, RoomId: chatId}
+	data := userAndRoomStruct{UserId: userIdInt, UserName: userName, RoomId: chatId, RoomName: chatsHub[indexChat].Room.RoomName}
 
 	tmpl, err := template.ParseFiles("./index1.html")
 	if err != nil {

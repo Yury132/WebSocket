@@ -8,20 +8,13 @@
   </head>
   <body>
 
+    <h2>Пользователь: {{.UserName}}</h2>
+    <!-- Скрываем со страницы -->
+    <div id="user" class="o-hide">{{.UserId}}</div>
+    <div id="chat" class="o-hide">{{.RoomId}}</div>
 
-
-
-
-    <h2>Пользователь:</h2>
-    <h2>ID пользователя:</h2>
-    <div id="user">{{.UserId}}</div>
-    <h2>ID комнаты:</h2>
-    <div id="chat">{{.RoomId}}</div>
-
-
-    <h2>Сообщения:</h2>
+    <h2>Сообщения в чате: {{.RoomName}}</h2>
     
-
     <!-- форма сообщений -->
     <form name="publish">
         <input type="text" name="message">
@@ -88,3 +81,11 @@
 
   </body>
 </html>
+
+<!-- Скрываем ID со страницы -->
+<style>
+.o-hide {
+  display: none;
+  transition: all ease 0.8s;
+}
+</style>
