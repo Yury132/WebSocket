@@ -1,16 +1,23 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/gorilla/websocket"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Настройки для WebSocket
@@ -47,6 +54,13 @@ type chatStruct struct {
 	User   []*userStruct     `json:"user"`
 }
 
+// Передаваемое сообщение в Nats
+type SendMessage struct {
+	Msg         string `json:"msg"`
+	MessageType int    `json:"messageType"`
+	ChatId      int    `json:"chatId"`
+}
+
 // Глобальные переменные
 
 // Hub всех пользователей
@@ -62,6 +76,13 @@ var store = sessions.NewCookieStore([]byte("super-secret-key"))
 
 // Уникальный ID автоинкремент для чатов и комнат
 var globalId = 1
+
+// Поток Nats
+var js jetstream.JetStream
+
+// var ctx context.Context
+// var cancel context.CancelFunc
+var stream jetstream.Stream
 
 //
 //
@@ -244,66 +265,6 @@ func getUsers(w http.ResponseWriter, r *http.Request) {
 	w.Write(response)
 }
 
-// Для первого пользователя и первого чата
-func homePage1(w http.ResponseWriter, r *http.Request) {
-
-	tmpl, err := template.ParseFiles("./index1.html")
-	if err != nil {
-		fmt.Println("filed to show home page")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, nil)
-}
-
-// Для второго пользователя и первого чата
-func homePage2(w http.ResponseWriter, r *http.Request) {
-
-	tmpl, err := template.ParseFiles("./index2.html")
-	if err != nil {
-		fmt.Println("filed to show home page")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, nil)
-}
-
-// Для третьего пользователя и первого чата
-func homePage3(w http.ResponseWriter, r *http.Request) {
-
-	tmpl, err := template.ParseFiles("./index3.html")
-	if err != nil {
-		fmt.Println("filed to show home page")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, nil)
-}
-
-// Для первого пользователя и второго чата
-func homePage4(w http.ResponseWriter, r *http.Request) {
-
-	tmpl, err := template.ParseFiles("./index4.html")
-	if err != nil {
-		fmt.Println("filed to show home page")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, nil)
-}
-
-// Для второго пользователя и второго чата
-func homePage5(w http.ResponseWriter, r *http.Request) {
-
-	tmpl, err := template.ParseFiles("./index5.html")
-	if err != nil {
-		fmt.Println("filed to show home page")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, nil)
-}
-
 // Подключение через WebSocket
 // Сюда приходят все клиенты
 func wsEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -377,7 +338,7 @@ func reader(conn *websocket.Conn, chatId int, userId int, roomId int) {
 		// При ошибке закрываем соединение - удаляем подключение и клиента из массива
 		if err != nil {
 			log.Println("Ошибка при чтении: ", err)
-			// Закрываем соединение-----------------------------------------------------------------------------------------------------
+			// Закрываем соединение
 			err = conn.Close()
 			if err != nil {
 				log.Println("Ошибка при закрытии соединения: ", err)
@@ -403,13 +364,33 @@ func reader(conn *websocket.Conn, chatId int, userId int, roomId int) {
 
 		log.Println("Пришло сообщение: ", string(p), " от пользователя ID ", usersHub[currentUserId].UserId, " - ", usersHub[currentUserId].UserName)
 
-		// Рассылка сообщения всем участникам чата---------------------------------------------------------------------------------------------
-		for i, conn := range chatsHub[currentChatId].Ws {
-			if err := conn.WriteMessage(messageType, p); err != nil {
-				log.Println("Ошибка при рассылке, ID подключения - ", i, " Ошибка:  ", err)
-				return
-			}
+		// Готовим сообщение для отправки
+		msg := SendMessage{
+			Msg:         string(p),
+			MessageType: messageType,
+			ChatId:      currentChatId,
 		}
+
+		// Кодируем
+		b, err := json.Marshal(msg)
+		if err != nil {
+			fmt.Println("js message marshal err")
+			return
+		}
+
+		// Отправляем полученное сообщение в Nats
+		if _, err = js.Publish(context.Background(), "events.us.page_loaded", b); err != nil {
+			fmt.Println("failed to publish message", err)
+			return
+		}
+
+		// // Рассылка сообщения всем участникам чата---------------------------------------------------------------------------------------Рассылка----------------------------
+		// for i, conn := range chatsHub[currentChatId].Ws {
+		// 	if err := conn.WriteMessage(messageType, p); err != nil {
+		// 		log.Println("Ошибка при рассылке, ID подключения - ", i, " Ошибка:  ", err)
+		// 		return
+		// 	}
+		// }
 
 	}
 }
@@ -487,12 +468,6 @@ func indexChRoom(roomId int) int {
 // Маршруты
 func setupRoutes() {
 	r := mux.NewRouter()
-
-	r.HandleFunc("/1", homePage1)
-	r.HandleFunc("/2", homePage2)
-	r.HandleFunc("/3", homePage3)
-	r.HandleFunc("/4", homePage4)
-	r.HandleFunc("/5", homePage5)
 	// Открываем подключение для каждого клиента по WebSocket
 	r.HandleFunc("/ws", wsEndpoint)
 	// Создание чата
@@ -510,9 +485,128 @@ func setupRoutes() {
 	http.Handle("/", r)
 }
 
+// // Отображаем текущее состояние потока
+// func printStreamState(ctx context.Context, stream jetstream.Stream) {
+// 	info, _ := stream.Info(ctx)
+// 	b, _ := json.MarshalIndent(info.State, "", " ")
+// 	fmt.Println(string(b))
+// }
+
+// Воркер
+func worker(id int, jobs <-chan *SendMessage) {
+	// Ожидаем получения данных для работы
+	// Если данных нет в канале - блокировка
+	for j := range jobs {
+		//fmt.Println("worker", id, "принял сообщение: ", j)
+		// Рассылка сообщения всем участникам чата
+		for i, conn := range chatsHub[j.ChatId].Ws {
+			if err := conn.WriteMessage(j.MessageType, []byte(j.Msg)); err != nil {
+				log.Println("Ошибка при рассылке, ID подключения - ", i, " Ошибка:  ", err)
+				continue
+			}
+		}
+		//fmt.Println("worker", id, "разослал сообщение: ", j)
+	}
+}
+
 func main() {
-	fmt.Println("Сервер запущен")
+
+	// Канал для воркеров
+	jobs := make(chan *SendMessage, 100)
+
+	// Сразу запускаем воркеров в горутинах
+	// Они будут ожидать получения данных для работы
+	for w := 1; w <= 3; w++ {
+		go worker(w, jobs)
+	}
+
+	// Адрес сервера nats
+	url := os.Getenv("NATS_URL")
+	if url == "" {
+		url = nats.DefaultURL
+	}
+
+	// Подключаемся к серверу
+	nc, err := nats.Connect(url)
+	if err != nil {
+		fmt.Println("Ошибка при Connect...")
+	}
+	defer nc.Drain()
+
+	js, err = jetstream.New(nc)
+	if err != nil {
+		fmt.Println("Ошибка при jetstream.New...")
+	}
+
+	cfg := jetstream.StreamConfig{
+		Name: "EVENTS",
+		// Очередь
+		Retention: jetstream.WorkQueuePolicy,
+		Subjects:  []string{"events.>"},
+	}
+
+	// При таймауте прога ломается после истечения времени!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	// ctx, cancel = context.WithTimeout(context.Background(), 50*time.Second)
+	// defer cancel()
+
+	// Создаем поток
+	stream, err = js.CreateStream(context.Background(), cfg)
+	if err != nil {
+		fmt.Println("Ошибка при js.CreateStream...")
+	}
+
+	// Создаем получателя
+	cons, err := stream.CreateOrUpdateConsumer(context.Background(), jetstream.ConsumerConfig{
+		Name: "processor-1",
+	})
+	if err != nil {
+		fmt.Println("Ошибка при stream.CreateOrUpdateConsumer...")
+	}
+
+	// В горутине получатель беспрерывно ждет входящих сообщений
+	// При получении сообщений, передает задачи-данные-смс воркерам для последующей рассылки
+	go func() {
+		_, err := cons.Consume(func(msg jetstream.Msg) {
+
+			// Декодируем
+			var info = new(SendMessage)
+			if err := json.Unmarshal(msg.Data(), info); err != nil {
+				fmt.Println("Ошибка при декодировании....")
+			} else {
+				fmt.Println("Полученные данные Consume: ", info)
+				//fmt.Println("Отправляем данные в канал")
+				// Заполняем канал данными
+				// Воркеры начнут работать
+				jobs <- info
+			}
+			// Подтверждаем получение сообщения
+			err := msg.DoubleAck(context.Background())
+			if err != nil {
+				fmt.Println("Ошибка при DoubleAck...")
+			}
+		})
+		if err != nil {
+			fmt.Println("Ошибка при Consume...")
+		}
+	}()
+
 	// Маршруты
 	setupRoutes()
-	log.Fatal(http.ListenAndServe(":8080", nil))
+
+	// Фиксируем нажатие Ctrl+C для остановки программы
+	shutdown := make(chan os.Signal, 1)
+	// Оповещаем канал
+	signal.Notify(shutdown, syscall.SIGINT)
+
+	// Запускаем сервер
+	go func() {
+		fmt.Println("Сервер запущен")
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			fmt.Println("failed to start server")
+		}
+	}()
+
+	// Ждем нажатия Ctrl+C
+	<-shutdown
+
 }
